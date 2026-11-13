@@ -3,7 +3,8 @@ import { useOutletContext } from 'react-router-dom';
 import StoreCard from '../components/StoreCard.jsx';
 import RotateButton from '../components/RotateButton.jsx';
 import Icon, { Spinner } from '../components/Icon.jsx';
-import { createStore } from '../api.js';
+import CopyField from '../components/CopyField.jsx';
+import { createStore, redirectUrl, updateStore } from '../api.js';
 import { classNames, formatMoney } from '../utils.js';
 
 const EMPTY_FORM = { name: '', shopifyDomain: '', shopifyToken: '', thresholdEuros: '250' };
@@ -16,8 +17,11 @@ function normalizeDomain(value) {
     .replace(/\/.*$/, '');
 }
 
-function AddStoreForm({ onCreated, notify, onCancel }) {
-  const [form, setForm] = useState(EMPTY_FORM);
+function StoreForm({ editing, onSaved, notify, onCancel }) {
+  const isEdit = Boolean(editing);
+  const [form, setForm] = useState(() =>
+    isEdit ? { name: editing.name, shopifyDomain: editing.shopify_domain, shopifyToken: '', thresholdEuros: String(editing.threshold_euros) } : EMPTY_FORM,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [showToken, setShowToken] = useState(false);
@@ -27,8 +31,9 @@ function AddStoreForm({ onCreated, notify, onCancel }) {
   const domain = normalizeDomain(form.shopifyDomain);
   const threshold = parseFloat(String(form.thresholdEuros).replace(',', '.'));
   const domainValid = /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(domain);
-  const thresholdValid = Number.isFinite(threshold) && threshold > 0;
-  const valid = form.name.trim() && domainValid && form.shopifyToken.trim() && thresholdValid;
+  const thresholdValid = isEdit || (Number.isFinite(threshold) && threshold > 0);
+  const tokenValid = isEdit || form.shopifyToken.trim();
+  const valid = form.name.trim() && domainValid && tokenValid && thresholdValid;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -36,18 +41,26 @@ function AddStoreForm({ onCreated, notify, onCancel }) {
     setSubmitting(true);
     setError(null);
     try {
-      const store = await createStore({
-        name: form.name.trim(),
-        shopifyDomain: domain,
-        shopifyToken: form.shopifyToken.trim(),
-        thresholdEuros: threshold,
-      });
-      notify(`« ${store?.name || form.name} » ajoutée`, 'success', 'Nouvelle boutique');
-      setForm(EMPTY_FORM);
-      await onCreated();
+      if (isEdit) {
+        const store = await updateStore(editing.id, {
+          name: form.name.trim(),
+          shopifyDomain: domain,
+          shopifyToken: form.shopifyToken.trim() || undefined,
+        });
+        notify(`« ${store?.name || form.name} » mise à jour`, 'success', 'Boutique modifiée');
+      } else {
+        const store = await createStore({
+          name: form.name.trim(),
+          shopifyDomain: domain,
+          shopifyToken: form.shopifyToken.trim(),
+          thresholdEuros: threshold,
+        });
+        notify(`« ${store?.name || form.name} » ajoutée. Configure maintenant son webhook.`, 'success', 'Nouvelle boutique');
+        setForm(EMPTY_FORM);
+      }
+      await onSaved();
     } catch (err) {
-      const msg = /UNIQUE/i.test(err.message) ? 'Ce domaine Shopify est déjà enregistré.' : err.message;
-      setError(msg);
+      setError(err.message);
     } finally {
       setSubmitting(false);
     }
@@ -57,9 +70,11 @@ function AddStoreForm({ onCreated, notify, onCancel }) {
     <form onSubmit={submit} className="glass animate-slide-in p-5">
       <div className="mb-5 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-white">Ajouter une boutique</h2>
+          <h2 className="text-base font-semibold text-white">{isEdit ? `Modifier « ${editing.name} »` : 'Ajouter une boutique'}</h2>
           <p className="text-xs text-slate-500">
-            Webhook Shopify à configurer ensuite : <code className="text-violet-300">/webhooks/&lt;id&gt;/orders/paid</code>
+            {isEdit
+              ? 'Laisse le secret vide pour garder l’actuel.'
+              : 'Après l’ajout, copie l’URL du webhook affichée sur la carte de la boutique.'}
           </p>
         </div>
         <button type="button" onClick={onCancel} className="btn-ghost btn-sm" aria-label="Fermer">
@@ -89,18 +104,18 @@ function AddStoreForm({ onCreated, notify, onCancel }) {
           )}
         </div>
         <div>
-          <label className="label" htmlFor="store-token">Secret webhook / token Shopify</label>
+          <label className="label" htmlFor="store-token">Secret de signature des webhooks</label>
           <div className="relative">
             <input
               id="store-token"
               type={showToken ? 'text' : 'password'}
               className="input pr-20"
-              placeholder="shpss_…"
+              placeholder={isEdit ? 'Inchangé' : 'Copié depuis Shopify › Notifications › Webhooks'}
               value={form.shopifyToken}
               onChange={set('shopifyToken')}
               autoComplete="off"
               spellCheck="false"
-              required
+              required={!isEdit}
             />
             <button
               type="button"
@@ -110,21 +125,23 @@ function AddStoreForm({ onCreated, notify, onCancel }) {
               {showToken ? 'Masquer' : 'Afficher'}
             </button>
           </div>
-          <p className="mt-1 text-xs text-slate-500">Utilisé pour vérifier la signature HMAC des webhooks.</p>
+          <p className="mt-1 text-xs text-slate-500">Sert à vérifier que les commandes viennent bien de Shopify.</p>
         </div>
-        <div>
-          <label className="label" htmlFor="store-threshold">Seuil de rotation (€)</label>
-          <input
-            id="store-threshold"
-            type="number"
-            min="1"
-            step="0.01"
-            className={classNames('input', !thresholdValid && 'border-red-500/60')}
-            value={form.thresholdEuros}
-            onChange={set('thresholdEuros')}
-            required
-          />
-        </div>
+        {!isEdit && (
+          <div>
+            <label className="label" htmlFor="store-threshold">Seuil de rotation (€)</label>
+            <input
+              id="store-threshold"
+              type="number"
+              min="1"
+              step="0.01"
+              className={classNames('input', !thresholdValid && 'border-red-500/60')}
+              value={form.thresholdEuros}
+              onChange={set('thresholdEuros')}
+              required
+            />
+          </div>
+        )}
       </div>
 
       {error && (
@@ -138,8 +155,8 @@ function AddStoreForm({ onCreated, notify, onCancel }) {
           Annuler
         </button>
         <button type="submit" className="btn-primary" disabled={!valid || submitting}>
-          {submitting ? <Spinner className="h-4 w-4" /> : <Icon name="plus" className="h-4 w-4" />}
-          Ajouter la boutique
+          {submitting ? <Spinner className="h-4 w-4" /> : <Icon name={isEdit ? 'check' : 'plus'} className="h-4 w-4" />}
+          {isEdit ? 'Enregistrer' : 'Ajouter la boutique'}
         </button>
       </div>
     </form>
@@ -191,6 +208,18 @@ export default function Stores() {
 
   return (
     <div className="space-y-6">
+      <div className="glass p-5">
+        <CopyField
+          label="Lien client (à mettre dans tes pubs, ta bio, tes liens)"
+          value={redirectUrl}
+          hint={
+            activeStore
+              ? `Envoie vers la boutique active : ${activeStore.shopify_domain}. Tu peux ajouter un chemin, ex. ${redirectUrl}/products/mon-produit`
+              : 'Aucune boutique active pour le moment : ajoute ou réactive une boutique.'
+          }
+        />
+      </div>
+
       <div className="glass grid grid-cols-2 gap-4 p-5 md:grid-cols-5">
         <SummaryItem label="Boutiques" value={stores.length} />
         <SummaryItem label="En rotation" value={summary.enabled} tone="text-emerald-300" />
@@ -218,7 +247,7 @@ export default function Stores() {
         <div className="flex items-center gap-2">
           <RotateButton activeStore={activeStore} onRotated={refresh} notify={notify} variant="ghost" />
           {!showForm && (
-            <button type="button" className="btn-primary" onClick={() => setShowForm(true)}>
+            <button type="button" className="btn-primary" onClick={() => setShowForm('new')}>
               <Icon name="plus" className="h-4 w-4" /> Ajouter une boutique
             </button>
           )}
@@ -226,10 +255,12 @@ export default function Stores() {
       </div>
 
       {showForm && (
-        <AddStoreForm
+        <StoreForm
+          key={showForm === 'new' ? 'new' : showForm.id}
+          editing={showForm === 'new' ? null : showForm}
           notify={notify}
           onCancel={() => setShowForm(false)}
-          onCreated={async () => {
+          onSaved={async () => {
             await refresh();
             setShowForm(false);
           }}
@@ -244,7 +275,17 @@ export default function Stores() {
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
           {filtered.map((store) => (
-            <StoreCard key={store.id} store={store} onChanged={refresh} notify={notify} detailed />
+            <StoreCard
+              key={store.id}
+              store={store}
+              onChanged={refresh}
+              notify={notify}
+              onEdit={(s) => {
+                setShowForm(s);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              detailed
+            />
           ))}
         </div>
       )}

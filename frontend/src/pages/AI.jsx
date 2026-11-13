@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import Icon, { Spinner } from '../components/Icon.jsx';
-import { InsightContent, InsightTypeBadge } from '../components/AIInsight.jsx';
+import { AIDisabledNotice, InsightContent, InsightTypeBadge } from '../components/AIInsight.jsx';
 import { generateInsight, getInsights } from '../api.js';
 import { INSIGHT_TYPES, classNames, formatDateTime, insightLabel, timeAgo } from '../utils.js';
 
@@ -111,6 +111,7 @@ function ErrorBubble({ message, onRetry }) {
 export default function AI() {
   const { notify } = useOutletContext();
   const [insights, setInsights] = useState([]);
+  const [aiEnabled, setAiEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [pendingType, setPendingType] = useState(null);
   const [lastRequest, setLastRequest] = useState(null); // { type, at, error?, insightId? }
@@ -119,8 +120,9 @@ export default function AI() {
   const load = useCallback(async () => {
     try {
       const data = await getInsights();
-      const list = Array.isArray(data) ? data : [];
+      const list = Array.isArray(data?.insights) ? data.insights : [];
       setInsights(list);
+      setAiEnabled(data?.enabled !== false);
       return list;
     } catch (err) {
       notify(err.message, 'error', 'Insights IA');
@@ -157,6 +159,7 @@ export default function AI() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
+      {!aiEnabled && <AIDisabledNotice />}
       {/* Actions */}
       <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {ACTIONS.map((a) => {
@@ -167,7 +170,7 @@ export default function AI() {
               key={a.type}
               type="button"
               onClick={() => generate(a.type)}
-              disabled={Boolean(pendingType)}
+              disabled={Boolean(pendingType) || !aiEnabled}
               className={classNames(
                 'glass group relative overflow-hidden p-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-glow disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0',
                 busy && 'border-accent/50 shadow-glow',

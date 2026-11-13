@@ -12,6 +12,7 @@ import { formatMoney, formatNumber, isToday, revenuePercent, storeColor, timeAgo
 export default function Dashboard() {
   const { stats, refresh, notify, freshOrderIds, ws } = useOutletContext();
   const [insights, setInsights] = useState([]);
+  const [aiEnabled, setAiEnabled] = useState(true);
   const [insightsLoading, setInsightsLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
@@ -29,7 +30,8 @@ export default function Dashboard() {
   const loadInsights = useCallback(async () => {
     try {
       const data = await getInsights();
-      setInsights(Array.isArray(data) ? data : []);
+      setInsights(Array.isArray(data?.insights) ? data.insights : []);
+      setAiEnabled(data?.enabled !== false);
     } catch (err) {
       notify(err.message, 'error', 'Insights IA');
     } finally {
@@ -184,6 +186,7 @@ export default function Dashboard() {
           onGenerate={handleGenerate}
           generating={generating}
           loading={insightsLoading}
+          disabled={!aiEnabled}
         />
       </section>
     </div>

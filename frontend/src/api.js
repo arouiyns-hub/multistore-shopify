@@ -1,11 +1,51 @@
 // Client REST du backend MultiStore.
-// Toutes les requêtes passent par VITE_API_URL et s'authentifient avec VITE_API_KEY.
+// La clé admin n'est jamais compilée dans le site : elle est saisie à la connexion
+// et gardée uniquement dans le navigateur de l'utilisateur.
 
-export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3001').replace(/\/+$/, '');
-const API_KEY = import.meta.env.VITE_API_KEY || '';
+export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3001').trim().replace(/\/+$/, '');
 
-export const WS_URL =
-  import.meta.env.VITE_WS_URL || API_URL.replace(/^http(s?):\/\//, (_, s) => `ws${s}://`);
+const WS_BASE = (import.meta.env.VITE_WS_URL || API_URL.replace(/^http(s?):\/\//, (_, s) => `ws${s}://`))
+  .trim()
+  .replace(/\/+$/, '');
+
+const STORAGE_KEY = 'multistore.adminKey';
+export const AUTH_EVENT = 'multistore:auth-required';
+
+let memoryKey = '';
+
+export function getApiKey() {
+  try {
+    return localStorage.getItem(STORAGE_KEY) || memoryKey;
+  } catch {
+    return memoryKey;
+  }
+}
+
+export function setApiKey(key) {
+  memoryKey = key;
+  try {
+    localStorage.setItem(STORAGE_KEY, key);
+  } catch {
+    // stockage indisponible (navigation privée) : la clé reste en mémoire
+  }
+}
+
+export function clearApiKey() {
+  memoryKey = '';
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // rien à faire
+  }
+}
+
+export function wsUrl() {
+  const key = getApiKey();
+  return key ? `${WS_BASE}/?key=${encodeURIComponent(key)}` : null;
+}
+
+export const redirectUrl = `${API_URL}/go`;
+export const webhookUrl = (storeId) => `${API_URL}/webhooks/${storeId}/orders/paid`;
 
 export class ApiError extends Error {
   constructor(message, status, body) {
@@ -16,8 +56,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body, signal } = {}) {
-  const headers = { 'x-api-key': API_KEY, Accept: 'application/json' };
+async function request(path, { method = 'GET', body, signal, key } = {}) {
+  const headers = { 'x-api-key': key ?? getApiKey(), Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
   let res;
@@ -30,7 +70,7 @@ async function request(path, { method = 'GET', body, signal } = {}) {
     });
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    throw new ApiError(`Backend injoignable (${API_URL})`, 0);
+    throw new ApiError('Serveur injoignable (il démarre peut-être, réessaie dans quelques secondes)', 0);
   }
 
   const text = await res.text();
@@ -46,11 +86,15 @@ async function request(path, { method = 'GET', body, signal } = {}) {
   if (!res.ok) {
     const message =
       (data && typeof data === 'object' && data.error) ||
-      (res.status === 401 ? 'Clé API invalide (VITE_API_KEY)' : `Erreur HTTP ${res.status}`);
+      (res.status === 401 ? 'Clé admin invalide' : `Erreur HTTP ${res.status}`);
+    if (res.status === 401 && key === undefined) window.dispatchEvent(new Event(AUTH_EVENT));
     throw new ApiError(message, res.status, data);
   }
   return data;
 }
+
+// Vérifie une clé sans la sauvegarder (écran de connexion)
+export const checkKey = (key) => request('/api/stores', { key });
 
 // --- Statistiques ---
 export const getStats = (opts) => request('/api/stats', opts);
@@ -68,6 +112,11 @@ export const createStore = ({ name, shopifyDomain, shopifyToken, thresholdEuros 
       thresholdEuros: thresholdEuros === '' || thresholdEuros == null ? undefined : Number(thresholdEuros),
     },
   });
+
+export const updateStore = (id, { name, shopifyDomain, shopifyToken }) =>
+  request(`/api/stores/${id}`, { method: 'PATCH', body: { name, shopifyDomain, shopifyToken } });
+
+export const deleteStore = (id) => request(`/api/stores/${id}`, { method: 'DELETE' });
 
 export const updateThreshold = (id, threshold) =>
   request(`/api/stores/${id}/threshold`, { method: 'PATCH', body: { threshold: Number(threshold) } });

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon, { Spinner } from './Icon.jsx';
+import CopyField from './CopyField.jsx';
 import * as api from '../api.js';
 import {
   classNames,
@@ -118,7 +119,7 @@ function Metric({ label, children }) {
  * @param {Function} props.notify       (message, tone, title) => void
  * @param {boolean}  props.detailed     affiche toutes les métriques + édition inline du seuil
  */
-export default function StoreCard({ store, onChanged, notify, detailed = false }) {
+export default function StoreCard({ store, onChanged, notify, onEdit, detailed = false }) {
   const [busy, setBusy] = useState(null);
   const active = Boolean(store.is_active) && Boolean(store.is_enabled);
   const enabled = Boolean(store.is_enabled);
@@ -157,11 +158,19 @@ export default function StoreCard({ store, onChanged, notify, detailed = false }
   const handleToggle = () => {
     if (enabled && active) {
       const ok = window.confirm(
-        `« ${store.name} » est la boutique active. La désactiver laissera la redirection sans boutique jusqu’à la prochaine rotation ou activation. Continuer ?`,
+        `« ${store.name} » est la boutique active. La désactiver fera passer les clients sur la boutique suivante. Continuer ?`,
       );
       if (!ok) return;
     }
     run('toggle', () => api.toggleStore(store.id, !enabled), enabled ? 'Boutique désactivée' : 'Boutique réactivée');
+  };
+
+  const handleDelete = () => {
+    const ok = window.confirm(
+      `Supprimer définitivement « ${store.name} » ?\n\nSes ${store.total_orders || 0} commande(s) et son historique seront effacés. Cette action est irréversible.`,
+    );
+    if (!ok) return;
+    run('delete', () => api.deleteStore(store.id), 'Boutique supprimée');
   };
 
   const handleThreshold = (threshold) =>
@@ -247,6 +256,11 @@ export default function StoreCard({ store, onChanged, notify, detailed = false }
           <Metric label="Dernier reset">
             <span title={formatDateTime(store.reset_at)}>{timeAgo(store.reset_at)}</span>
           </Metric>
+          <CopyField
+            className="col-span-2 mt-1"
+            label="URL du webhook (Shopify → Commande payée)"
+            value={api.webhookUrl(store.id)}
+          />
         </div>
       ) : (
         <div className="mt-4 grid grid-cols-2 gap-2">
@@ -271,6 +285,24 @@ export default function StoreCard({ store, onChanged, notify, detailed = false }
           {busy === 'reset' ? <Spinner className="h-3.5 w-3.5" /> : <Icon name="reset" className="h-3.5 w-3.5" />}
           Reset
         </button>
+        {detailed && onEdit && (
+          <button type="button" className="btn-ghost btn-sm" onClick={() => onEdit(store)} disabled={busy !== null}>
+            <Icon name="pencil" className="h-3.5 w-3.5" />
+            Modifier
+          </button>
+        )}
+        {detailed && (
+          <button
+            type="button"
+            className="btn-ghost btn-sm text-red-300 hover:text-red-200"
+            onClick={handleDelete}
+            disabled={busy !== null}
+            aria-label="Supprimer la boutique"
+            title="Supprimer la boutique"
+          >
+            {busy === 'delete' ? <Spinner className="h-3.5 w-3.5" /> : <Icon name="trash" className="h-3.5 w-3.5" />}
+          </button>
+        )}
         <button
           type="button"
           className={classNames(enabled ? 'btn-danger' : 'btn-success', 'btn-sm ml-auto')}

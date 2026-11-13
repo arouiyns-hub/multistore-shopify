@@ -1,99 +1,146 @@
-const Anthropic = require('@anthropic-ai/sdk');
+const AnthropicModule = require('@anthropic-ai/sdk');
 const { client } = require('../db/database');
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const Anthropic = AnthropicModule.default || AnthropicModule;
+const MODEL = 'claude-opus-5-5';
+
+let anthropic = null;
+
+function isEnabled() {
+  return Boolean((process.env.ANTHROPIC_API_KEY || '').trim());
+}
+
+function getAnthropic() {
+  if (!isEnabled()) {
+    const err = new Error("Assistant IA désactivé : ajoute la variable ANTHROPIC_API_KEY sur Railway pour l'activer");
+    err.status = 503;
+    throw err;
+  }
+  if (!anthropic) anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY.trim() });
+  return anthropic;
+}
+
+const SYSTEM = `Tu es un analyste e-commerce qui conseille le propriétaire d'un réseau de boutiques Shopify.
+Les boutiques tournent : une seule boutique est active à la fois et reçoit le trafic. Quand son CA du cycle (current_revenue) atteint son seuil (threshold_euros), la suivante devient active et le CA du cycle de l'ancienne repart à zéro. total_revenue est le CA cumulé depuis le début.
+Réponds en français, en texte brut avec des puces "- ", sans titre ni markdown gras. Sois concret et appuie-toi uniquement sur les chiffres fournis ; si les données sont vides ou insuffisantes, dis-le simplement.`;
+
+const PROMPTS = {
+  daily_summary: (s) => `Données des boutiques :
+${JSON.stringify(s, null, 2)}
+
+Fais un résumé du jour en 3 à 5 puces : performance globale, boutique la plus performante, alertes éventuelles (rotations très fréquentes, boutique proche du seuil, boutique désactivée), et un conseil d'optimisation.`,
+
+  rotation_analysis: (s) => `Rotations des 7 derniers jours :
+${JSON.stringify(s.recentRotations, null, 2)}
+
+Boutiques :
+${JSON.stringify(s.stores, null, 2)}
+
+Analyse en 3 à 5 puces : le rythme de rotation est-il normal ou trop rapide, faut-il ajuster les seuils, y a-t-il des anomalies.`,
+
+  sales_forecast: (s) => `CA par jour sur les 7 derniers jours :
+${JSON.stringify(s.salesHistory, null, 2)}
+
+Boutiques :
+${JSON.stringify(s.stores, null, 2)}
+
+Fais une prévision simple pour les prochaines 24 h en 3 à 4 puces : volume attendu, nombre de rotations probables, boutique à surveiller.`,
+};
 
 async function generateInsight(type = 'daily_summary') {
+  if (!PROMPTS[type]) {
+    const err = new Error('Type d’analyse inconnu');
+    err.status = 400;
+    throw err;
+  }
+  const ai = getAnthropic();
   const stats = await getStatsForAI();
 
-  const prompts = {
-    daily_summary: `Tu es un assistant e-commerce expert. Voici les données de mes boutiques Shopify :
+  let message;
+  try {
+    message = await ai.beta.messages.create({
+      model: MODEL,
+      max_tokens: 16000,
+      output_config: { effort: 'low' },
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      system: SYSTEM,
+      messages: [{ role: 'user', content: PROMPTS[type](stats) }],
+    });
+  } catch (err) {
+    if (err instanceof Anthropic.AuthenticationError) {
+      err.message = 'Clé ANTHROPIC_API_KEY invalide';
+      err.status = 502;
+    } else if (err instanceof Anthropic.RateLimitError) {
+      err.message = 'Limite de requêtes Claude atteinte, réessaie dans une minute';
+      err.status = 429;
+    } else if (err instanceof Anthropic.APIError) {
+      err.message = `Erreur API Claude (${err.status ?? 'réseau'}) : ${err.message}`;
+      err.status = 502;
+    }
+    throw err;
+  }
 
-${JSON.stringify(stats, null, 2)}
+  if (message.stop_reason === 'refusal') {
+    const err = new Error("Claude n'a pas pu produire cette analyse");
+    err.status = 502;
+    throw err;
+  }
 
-Génère un résumé quotidien concis (3-5 points) avec :
-- Performance globale du jour
-- Boutique la plus performante
-- Alertes si nécessaire (rotation fréquente, boutique proche du seuil)
-- 1 conseil d'optimisation
-Réponds en français, format bullet points.`,
-
-    rotation_analysis: `Tu es un expert en e-commerce multi-boutiques. Données de rotations récentes :
-
-${JSON.stringify(stats.recentRotations, null, 2)}
-
-Analyse ces rotations et dis-moi :
-- Le rythme de rotation est-il normal ou trop rapide ?
-- Faut-il ajuster le seuil de 250€ ?
-- Y a-t-il des patterns inhabituels ?
-Réponds en français, sois direct et concis.`,
-
-    sales_forecast: `Données de ventes des 7 derniers jours :
-
-${JSON.stringify(stats.salesHistory, null, 2)}
-
-Fais une prévision simple pour les prochaines 24h et suggère si je dois :
-- Préparer plus de stock
-- Ajuster le seuil de rotation
-- Surveiller une boutique en particulier
-Réponds en français, 3-4 lignes maximum.`,
-  };
-
-  const prompt = prompts[type] || prompts.daily_summary;
-
-  const message = await anthropic.messages.create({
-    model: 'claude-opus-4-5',
-    max_tokens: 500,
-    messages: [{ role: 'user', content: prompt }],
-  });
-
-  const content = message.content[0].text;
+  const content = message.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+  if (!content) {
+    const err = new Error('Réponse vide de Claude');
+    err.status = 502;
+    throw err;
+  }
 
   await client.execute({
     sql: 'INSERT INTO ai_insights (type, content, data_snapshot) VALUES (?, ?, ?)',
     args: [type, content, JSON.stringify(stats)],
   });
-
   return content;
 }
 
 async function getStatsForAI() {
-  const storesR = await client.execute(
-    'SELECT id, name, current_revenue, total_revenue, total_orders, threshold_euros, is_active FROM stores'
-  );
-  const ordersR = await client.execute(
-    `SELECT store_id, total_price, created_at FROM orders WHERE created_at >= datetime('now', '-7 days') ORDER BY created_at DESC`
-  );
-  const rotationsR = await client.execute(
-    `SELECT r.reason, r.revenue_at_rotation, r.created_at, sf.name as from_store, st.name as to_store
-     FROM rotations r
-     LEFT JOIN stores sf ON r.from_store_id = sf.id
-     JOIN stores st ON r.to_store_id = st.id
-     WHERE r.created_at >= datetime('now', '-7 days')
-     ORDER BY r.created_at DESC`
-  );
-  const dailyR = await client.execute(
-    `SELECT date(created_at) as day, SUM(total_price) as revenue, COUNT(*) as orders
-     FROM orders WHERE created_at >= datetime('now', '-7 days')
-     GROUP BY date(created_at) ORDER BY day DESC`
-  );
+  const [storesR, ordersR, rotationsR, dailyR] = await Promise.all([
+    client.execute('SELECT id, name, current_revenue, total_revenue, total_orders, threshold_euros, is_active, is_enabled FROM stores ORDER BY id'),
+    client.execute(`SELECT COUNT(*) AS n FROM orders WHERE created_at >= datetime('now', '-7 days')`),
+    client.execute(
+      `SELECT r.reason, r.revenue_at_rotation, r.created_at, sf.name AS from_store, st.name AS to_store
+       FROM rotations r
+       LEFT JOIN stores sf ON r.from_store_id = sf.id
+       JOIN stores st ON r.to_store_id = st.id
+       WHERE r.created_at >= datetime('now', '-7 days')
+       ORDER BY r.created_at DESC LIMIT 100`,
+    ),
+    client.execute(
+      `SELECT date(created_at) AS day, ROUND(SUM(total_price), 2) AS revenue, COUNT(*) AS orders
+       FROM orders WHERE created_at >= datetime('now', '-7 days')
+       GROUP BY date(created_at) ORDER BY day DESC`,
+    ),
+  ]);
 
   const stores = storesR.rows;
   return {
+    generatedAt: new Date().toISOString(),
     stores,
-    recentOrders: ordersR.rows.length,
+    ordersLast7Days: Number(ordersR.rows[0]?.n) || 0,
     recentRotations: rotationsR.rows,
     salesHistory: dailyR.rows,
-    totalCurrentRevenue: stores.reduce((sum, s) => sum + (s.current_revenue || 0), 0),
+    totalCurrentRevenue: Math.round(stores.reduce((sum, s) => sum + (Number(s.current_revenue) || 0), 0) * 100) / 100,
   };
 }
 
 async function getLatestInsights(limit = 5) {
   const r = await client.execute({
-    sql: 'SELECT * FROM ai_insights ORDER BY created_at DESC LIMIT ?',
+    sql: 'SELECT id, type, content, created_at FROM ai_insights ORDER BY created_at DESC, id DESC LIMIT ?',
     args: [limit],
   });
   return r.rows;
 }
 
-module.exports = { generateInsight, getLatestInsights };
+module.exports = { generateInsight, getLatestInsights, isEnabled, MODEL };

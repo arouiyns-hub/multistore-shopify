@@ -32,10 +32,6 @@ services:
     envVars:
       - key: VITE_API_URL
         sync: false
-      - key: VITE_API_KEY
-        sync: false
-      - key: VITE_WS_URL
-        sync: false
     headers:
       - path: /*
         name: Cache-Control

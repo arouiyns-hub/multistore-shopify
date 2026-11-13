@@ -143,8 +143,11 @@ export function rotationReason(reason) {
   const labels = {
     threshold_reached: 'Seuil atteint',
     manual: 'Manuelle',
+    manual_activation: 'Activation forcée',
+    store_disabled: 'Boutique désactivée',
+    store_removed: 'Boutique supprimée',
   };
-  return { label: labels[base] || base.replace(/_/g, ' '), reset, manual: base === 'manual' };
+  return { label: labels[base] || base.replace(/_/g, ' '), reset, manual: base === 'manual' || base === 'manual_activation' };
 }
 
 export function orderStatus(status) {

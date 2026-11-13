@@ -1,9 +1,11 @@
 const { createClient } = require('@libsql/client');
 
-const client = createClient({
-  url: process.env.TURSO_DATABASE_URL || 'file:local.db',
-  authToken: process.env.TURSO_AUTH_TOKEN || undefined,
-});
+const url = (process.env.TURSO_DATABASE_URL || 'file:local.db').trim();
+const authToken = (process.env.TURSO_AUTH_TOKEN || '').trim() || undefined;
+
+const client = createClient({ url, authToken });
+
+const state = { ready: false, error: null };
 
 async function initDb() {
   await client.batch([
@@ -50,7 +52,14 @@ async function initDb() {
       data_snapshot TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )`,
+    'CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_orders_store ON orders(store_id)',
+    'CREATE INDEX IF NOT EXISTS idx_rotations_created ON rotations(created_at)',
   ], 'write');
 }
 
-module.exports = { client, initDb };
+function describeTarget() {
+  return url.replace(/^(\w+:\/\/)?([^/?]+).*$/, '$2');
+}
+
+module.exports = { client, initDb, state, describeTarget };

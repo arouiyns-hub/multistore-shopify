@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout.jsx';
+import Login from './components/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Stores from './pages/Stores.jsx';
 import Orders from './pages/Orders.jsx';
 import Rotations from './pages/Rotations.jsx';
 import AI from './pages/AI.jsx';
-import { getRedirect, getStats, WS_URL } from './api.js';
+import { AUTH_EVENT, clearApiKey, getApiKey, getRedirect, getStats, wsUrl } from './api.js';
 import useWebSocket from './useWebSocket.js';
 import { formatMoney } from './utils.js';
 
@@ -16,6 +17,40 @@ const FRESH_HIGHLIGHT_MS = 6000;
 let toastSeq = 0;
 
 export default function App() {
+  const [authed, setAuthed] = useState(() => Boolean(getApiKey()));
+  const [reason, setReason] = useState(null);
+
+  useEffect(() => {
+    const onAuthRequired = () => {
+      clearApiKey();
+      setReason('Session expirée ou clé admin modifiée : reconnecte-toi.');
+      setAuthed(false);
+    };
+    window.addEventListener(AUTH_EVENT, onAuthRequired);
+    return () => window.removeEventListener(AUTH_EVENT, onAuthRequired);
+  }, []);
+
+  const logout = useCallback(() => {
+    clearApiKey();
+    setReason(null);
+    setAuthed(false);
+  }, []);
+
+  if (!authed) {
+    return (
+      <Login
+        reason={reason}
+        onLogin={() => {
+          setReason(null);
+          setAuthed(true);
+        }}
+      />
+    );
+  }
+  return <Panel onLogout={logout} />;
+}
+
+function Panel({ onLogout }) {
   const [stats, setStats] = useState(null);
   const [redirect, setRedirect] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -90,20 +125,18 @@ export default function App() {
     (msg) => {
       if (!msg || typeof msg !== 'object') return;
       const data = msg.data || {};
-      // Le backend envoie data.order = ligne boutique mise à jour (name, current_revenue…)
-      const storeName = data.order?.store_name || data.order?.name || 'une boutique';
+      const storeName = data.store?.name || 'une boutique';
 
       if (msg.type === 'new_order') {
-        const revenue = data.order?.current_revenue;
+        const amount = data.order?.total_price;
+        const revenue = data.store?.current_revenue;
         notify(
-          revenue != null
-            ? `${storeName} — CA courant ${formatMoney(revenue)}`
-            : `Commande reçue sur ${storeName}`,
+          `${storeName} : +${formatMoney(amount)}${revenue != null ? ` · cycle ${formatMoney(revenue)}` : ''}`,
           'success',
           'Nouvelle commande',
         );
       } else if (msg.type === 'rotation') {
-        const nextName = data.nextStore?.name || '—';
+        const nextName = data.nextStore?.name || 'aucune boutique';
         notify(`${storeName} → ${nextName}`, 'warning', 'Rotation automatique');
       }
       refresh();
@@ -111,7 +144,8 @@ export default function App() {
     [notify, refresh],
   );
 
-  const ws = useWebSocket(WS_URL, { onMessage: handleWsMessage, onOpen: refresh });
+  const socketUrl = useMemo(() => wsUrl(), []);
+  const ws = useWebSocket(socketUrl, { onMessage: handleWsMessage, onOpen: refresh });
 
   const context = {
     stats,
@@ -123,6 +157,7 @@ export default function App() {
     notify,
     freshOrderIds,
     ws,
+    onLogout,
   };
 
   return (

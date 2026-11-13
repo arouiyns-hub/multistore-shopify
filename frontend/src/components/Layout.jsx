@@ -37,7 +37,7 @@ function WsStatus({ ws }) {
   return (
     <span
       className={classNames('inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium', s.cls)}
-      title={ws.status === 'closed' ? 'WebSocket déconnecté — polling 30 s actif' : 'WebSocket'}
+      title={ws.status === 'closed' ? 'Temps réel déconnecté : actualisation automatique toutes les 30 s' : 'Temps réel'}
     >
       <span className={classNames('h-2 w-2 rounded-full', s.dot, ws.status !== 'closed' && 'animate-pulse-dot')} />
       {s.label}
@@ -112,7 +112,7 @@ export default function Layout({ context, toasts, onDismissToast }) {
   const [refreshing, setRefreshing] = useState(false);
   const [, forceTick] = useState(0);
 
-  const { stats, redirect, error, loading, lastUpdated, refresh, ws } = context;
+  const { stats, redirect, error, loading, lastUpdated, refresh, ws, onLogout } = context;
   const activeStore = stats?.stores?.find((s) => s.is_active && s.is_enabled) || null;
   const meta = TITLES[location.pathname] || TITLES['/'];
 
@@ -193,6 +193,9 @@ export default function Layout({ context, toasts, onDismissToast }) {
               >
                 {refreshing ? <Spinner className="h-4 w-4" /> : <Icon name="refresh" className="h-4 w-4" />}
                 <span className="hidden sm:inline">{lastUpdated ? timeAgo(lastUpdated) : 'Rafraîchir'}</span>
+              </button>
+              <button type="button" onClick={onLogout} className="btn-ghost btn-sm" title="Se déconnecter" aria-label="Se déconnecter">
+                <Icon name="power" className="h-4 w-4" />
               </button>
             </div>
           </div>

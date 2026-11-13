@@ -108,7 +108,22 @@ export function InsightTypeBadge({ type }) {
  * @param {boolean}     props.generating
  * @param {boolean}     props.loading
  */
-export default function AIInsight({ insight, onGenerate, generating = false, loading = false }) {
+export function AIDisabledNotice() {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+      <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
+      <div>
+        <div className="font-medium">Assistant IA désactivé</div>
+        <div className="text-amber-200/80">
+          Il est optionnel et payant (API Claude, quelques centimes par analyse). Pour l’activer, ajoute la variable
+          ANTHROPIC_API_KEY sur Railway. Tout le reste fonctionne sans.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function AIInsight({ insight, onGenerate, generating = false, loading = false, disabled = false }) {
   const [type, setType] = useState('daily_summary');
 
   return (
@@ -135,7 +150,7 @@ export default function AIInsight({ insight, onGenerate, generating = false, loa
             value={type}
             onChange={(e) => setType(e.target.value)}
             className="input w-auto py-1.5 text-xs"
-            disabled={generating}
+            disabled={generating || disabled}
             aria-label="Type d’insight"
           >
             {Object.entries(INSIGHT_TYPES).map(([key, meta]) => (
@@ -144,7 +159,7 @@ export default function AIInsight({ insight, onGenerate, generating = false, loa
               </option>
             ))}
           </select>
-          <button type="button" className="btn-primary btn-sm" onClick={() => onGenerate?.(type)} disabled={generating}>
+          <button type="button" className="btn-primary btn-sm" onClick={() => onGenerate?.(type)} disabled={generating || disabled}>
             {generating ? <Spinner className="h-3.5 w-3.5" /> : <Icon name="sparkles" className="h-3.5 w-3.5" />}
             {generating ? 'Génération…' : 'Générer'}
           </button>
@@ -172,6 +187,8 @@ export default function AIInsight({ insight, onGenerate, generating = false, loa
             </div>
             <InsightContent content={insight.content} />
           </div>
+        ) : disabled ? (
+          <AIDisabledNotice />
         ) : (
           <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
             Aucun insight pour l’instant. Cliquez sur « Générer » pour obtenir une première analyse.

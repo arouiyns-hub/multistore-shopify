@@ -1,10 +1,10 @@
 const Anthropic = require('@anthropic-ai/sdk');
-const db = require('../db/database');
+const { client } = require('../db/database');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 async function generateInsight(type = 'daily_summary') {
-  const stats = getStatsForAI();
+  const stats = await getStatsForAI();
 
   const prompts = {
     daily_summary: `Tu es un assistant e-commerce expert. Voici les données de mes boutiques Shopify :
@@ -41,7 +41,7 @@ Réponds en français, 3-4 lignes maximum.`,
 
   const prompt = prompts[type] || prompts.daily_summary;
 
-  const message = await client.messages.create({
+  const message = await anthropic.messages.create({
     model: 'claude-opus-4-5',
     max_tokens: 500,
     messages: [{ role: 'user', content: prompt }],
@@ -49,55 +49,51 @@ Réponds en français, 3-4 lignes maximum.`,
 
   const content = message.content[0].text;
 
-  db.prepare(`
-    INSERT INTO ai_insights (type, content, data_snapshot)
-    VALUES (?, ?, ?)
-  `).run(type, content, JSON.stringify(stats));
+  await client.execute({
+    sql: 'INSERT INTO ai_insights (type, content, data_snapshot) VALUES (?, ?, ?)',
+    args: [type, content, JSON.stringify(stats)],
+  });
 
   return content;
 }
 
-function getStatsForAI() {
-  const stores = db.prepare('SELECT id, name, current_revenue, total_revenue, total_orders, threshold_euros, is_active FROM stores').all();
+async function getStatsForAI() {
+  const storesR = await client.execute(
+    'SELECT id, name, current_revenue, total_revenue, total_orders, threshold_euros, is_active FROM stores'
+  );
+  const ordersR = await client.execute(
+    `SELECT store_id, total_price, created_at FROM orders WHERE created_at >= datetime('now', '-7 days') ORDER BY created_at DESC`
+  );
+  const rotationsR = await client.execute(
+    `SELECT r.reason, r.revenue_at_rotation, r.created_at, sf.name as from_store, st.name as to_store
+     FROM rotations r
+     LEFT JOIN stores sf ON r.from_store_id = sf.id
+     JOIN stores st ON r.to_store_id = st.id
+     WHERE r.created_at >= datetime('now', '-7 days')
+     ORDER BY r.created_at DESC`
+  );
+  const dailyR = await client.execute(
+    `SELECT date(created_at) as day, SUM(total_price) as revenue, COUNT(*) as orders
+     FROM orders WHERE created_at >= datetime('now', '-7 days')
+     GROUP BY date(created_at) ORDER BY day DESC`
+  );
 
-  const recentOrders = db.prepare(`
-    SELECT store_id, total_price, created_at
-    FROM orders
-    WHERE created_at >= datetime('now', '-7 days')
-    ORDER BY created_at DESC
-  `).all();
-
-  const recentRotations = db.prepare(`
-    SELECT r.reason, r.revenue_at_rotation, r.created_at,
-      sf.name as from_store, st.name as to_store
-    FROM rotations r
-    LEFT JOIN stores sf ON r.from_store_id = sf.id
-    JOIN stores st ON r.to_store_id = st.id
-    WHERE r.created_at >= datetime('now', '-7 days')
-    ORDER BY r.created_at DESC
-  `).all();
-
-  const dailyRevenue = db.prepare(`
-    SELECT date(created_at) as day, SUM(total_price) as revenue, COUNT(*) as orders
-    FROM orders
-    WHERE created_at >= datetime('now', '-7 days')
-    GROUP BY date(created_at)
-    ORDER BY day DESC
-  `).all();
-
+  const stores = storesR.rows;
   return {
     stores,
-    recentOrders: recentOrders.length,
-    recentRotations,
-    salesHistory: dailyRevenue,
-    totalCurrentRevenue: stores.reduce((sum, s) => sum + s.current_revenue, 0),
+    recentOrders: ordersR.rows.length,
+    recentRotations: rotationsR.rows,
+    salesHistory: dailyR.rows,
+    totalCurrentRevenue: stores.reduce((sum, s) => sum + (s.current_revenue || 0), 0),
   };
 }
 
 async function getLatestInsights(limit = 5) {
-  return db.prepare(`
-    SELECT * FROM ai_insights ORDER BY created_at DESC LIMIT ?
-  `).all(limit);
+  const r = await client.execute({
+    sql: 'SELECT * FROM ai_insights ORDER BY created_at DESC LIMIT ?',
+    args: [limit],
+  });
+  return r.rows;
 }
 
 module.exports = { generateInsight, getLatestInsights };

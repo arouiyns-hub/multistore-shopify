@@ -13,10 +13,9 @@ function verifyShopifyWebhook(req, secret) {
   return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(hmac));
 }
 
-// Shopify envoie le webhook sur /webhooks/:storeId/orders/paid
-router.post('/:storeId/orders/paid', express.raw({ type: 'application/json' }), (req, res) => {
+router.post('/:storeId/orders/paid', express.raw({ type: 'application/json' }), async (req, res) => {
   const { storeId } = req.params;
-  const store = storeManager.getStoreById(parseInt(storeId));
+  const store = await storeManager.getStoreById(parseInt(storeId));
 
   if (!store) return res.status(404).json({ error: 'Store not found' });
 
@@ -31,7 +30,7 @@ router.post('/:storeId/orders/paid', express.raw({ type: 'application/json' }), 
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
-  const result = storeManager.recordOrder(parseInt(storeId), {
+  const result = await storeManager.recordOrder(parseInt(storeId), {
     shopifyOrderId: String(order.id),
     orderNumber: order.order_number ? String(order.order_number) : null,
     customerEmail: order.email || null,
@@ -50,8 +49,8 @@ router.post('/:storeId/orders/paid', express.raw({ type: 'application/json' }), 
         type: result.rotated ? 'rotation' : 'new_order',
         data: result,
       });
-      wss.clients.forEach((client) => {
-        if (client.readyState === 1) client.send(payload);
+      wss.clients.forEach((c) => {
+        if (c.readyState === 1) c.send(payload);
       });
     }
   }
@@ -59,16 +58,14 @@ router.post('/:storeId/orders/paid', express.raw({ type: 'application/json' }), 
   res.status(200).json({ received: true });
 });
 
-// Webhook générique (Shopify envoie aussi sur /webhooks sans storeId via app proxy)
-router.post('/generic', express.raw({ type: 'application/json' }), (req, res) => {
+router.post('/generic', express.raw({ type: 'application/json' }), async (req, res) => {
   const shopDomain = req.headers['x-shopify-shop-domain'];
   if (!shopDomain) return res.status(400).json({ error: 'Missing shop domain' });
 
-  const stores = storeManager.getAllStores();
+  const stores = await storeManager.getAllStores();
   const store = stores.find((s) => s.shopify_domain === shopDomain);
   if (!store) return res.status(404).json({ error: 'Store not registered' });
 
-  // Redirect to storeId-based handler logic (reuse)
   req.params = { storeId: String(store.id) };
   router.handle(req, res);
 });

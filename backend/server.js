@@ -56,15 +56,19 @@ async function start() {
   try {
     await initDb();
     console.log('[DB] Tables initialisées (Turso)');
-    server.listen(PORT, () => {
-      console.log(`\n🚀 MultiStore Backend démarré sur http://localhost:${PORT}`);
-      console.log(`📡 WebSocket actif`);
-      console.log(`📋 Panel API : http://localhost:${PORT}/api/stats\n`);
-    });
   } catch (err) {
     console.error('[DB] Erreur initialisation:', err.message);
-    process.exit(1);
+    if (err.cause) {
+      console.error('[DB] Cause:', err.cause?.message, '| code:', err.cause?.code);
+    }
+    console.error('[DB] URL utilisée:', (process.env.TURSO_DATABASE_URL || 'non définie').substring(0, 60));
+    console.warn('[DB] ATTENTION: serveur démarre sans DB - toutes les routes DB vont échouer');
   }
+  server.listen(PORT, () => {
+    console.log(`\n🚀 MultiStore Backend démarré sur http://localhost:${PORT}`);
+    console.log(`📡 WebSocket actif`);
+    console.log(`📋 Panel API : http://localhost:${PORT}/api/stats\n`);
+  });
 }
 
 start();

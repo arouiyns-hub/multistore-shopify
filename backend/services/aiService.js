@@ -1,23 +1,22 @@
-const AnthropicModule = require('@anthropic-ai/sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { client } = require('../db/database');
 
-const Anthropic = AnthropicModule.default || AnthropicModule;
-const MODEL = 'claude-opus-5-5';
+const MODEL = 'gemini-2.0-flash';
 
-let anthropic = null;
+let genAI = null;
 
 function isEnabled() {
-  return Boolean((process.env.ANTHROPIC_API_KEY || '').trim());
+  return Boolean((process.env.GEMINI_API_KEY || '').trim());
 }
 
-function getAnthropic() {
+function getClient() {
   if (!isEnabled()) {
-    const err = new Error("Assistant IA désactivé : ajoute la variable ANTHROPIC_API_KEY sur Railway pour l'activer");
+    const err = new Error("Assistant IA désactivé : ajoute la variable GEMINI_API_KEY sur Railway pour l'activer");
     err.status = 503;
     throw err;
   }
-  if (!anthropic) anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY.trim() });
-  return anthropic;
+  if (!genAI) genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY.trim());
+  return genAI;
 }
 
 const SYSTEM = `Tu es un analyste e-commerce qui conseille le propriétaire d'un réseau de boutiques Shopify.
@@ -49,51 +48,37 @@ Fais une prévision simple pour les prochaines 24 h en 3 à 4 puces : volume att
 
 async function generateInsight(type = 'daily_summary') {
   if (!PROMPTS[type]) {
-    const err = new Error('Type d’analyse inconnu');
+    const err = new Error('Type d\'analyse inconnu');
     err.status = 400;
     throw err;
   }
-  const ai = getAnthropic();
+  const ai = getClient();
   const stats = await getStatsForAI();
 
-  let message;
+  const model = ai.getGenerativeModel({
+    model: MODEL,
+    systemInstruction: SYSTEM,
+  });
+
+  let result;
   try {
-    message = await ai.beta.messages.create({
-      model: MODEL,
-      max_tokens: 16000,
-      output_config: { effort: 'low' },
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      system: SYSTEM,
-      messages: [{ role: 'user', content: PROMPTS[type](stats) }],
-    });
+    result = await model.generateContent(PROMPTS[type](stats));
   } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) {
-      err.message = 'Clé ANTHROPIC_API_KEY invalide';
+    if (err.status === 401 || err.status === 403) {
+      err.message = 'Clé GEMINI_API_KEY invalide';
       err.status = 502;
-    } else if (err instanceof Anthropic.RateLimitError) {
-      err.message = 'Limite de requêtes Claude atteinte, réessaie dans une minute';
-      err.status = 429;
-    } else if (err instanceof Anthropic.APIError) {
-      err.message = `Erreur API Claude (${err.status ?? 'réseau'}) : ${err.message}`;
+    } else if (err.status === 429) {
+      err.message = 'Limite de requêtes Gemini atteinte, réessaie dans une minute';
+    } else {
+      err.message = `Erreur API Gemini : ${err.message}`;
       err.status = 502;
     }
     throw err;
   }
 
-  if (message.stop_reason === 'refusal') {
-    const err = new Error("Claude n'a pas pu produire cette analyse");
-    err.status = 502;
-    throw err;
-  }
-
-  const content = message.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n')
-    .trim();
+  const content = result.response.text().trim();
   if (!content) {
-    const err = new Error('Réponse vide de Claude');
+    const err = new Error('Réponse vide de Gemini');
     err.status = 502;
     throw err;
   }

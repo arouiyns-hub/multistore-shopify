@@ -135,7 +135,7 @@ async function connectDb(attempt = 1) {
 const PORT = Number(process.env.PORT) || 3001;
 
 if (!process.env.ADMIN_API_KEY) console.warn('[CONFIG] ADMIN_API_KEY absente : le panel restera bloqué tant qu’elle n’est pas définie');
-if (!aiService.isEnabled()) console.warn('[CONFIG] ANTHROPIC_API_KEY absente : assistant IA désactivé');
+if (!aiService.isEnabled()) console.warn('[CONFIG] GEMINI_API_KEY absente : assistant IA désactivé');
 
 server.listen(PORT, () => {
   console.log(`[HTTP] MultiStore backend sur le port ${PORT} — CORS: ${allowedOrigins.join(', ')}`);

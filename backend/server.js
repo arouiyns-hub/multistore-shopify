@@ -70,7 +70,7 @@ app.get(/^\/go(\/.*)?$/, async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.json({ name: 'MultiStore backend', health: '/health', redirect: '/go' }));
+app.get('/', (req, res) => res.redirect(302, '/go'));
 
 // WebSocket temps réel, réservé au panel (clé admin passée en ?key=)
 const wss = new WebSocketServer({
